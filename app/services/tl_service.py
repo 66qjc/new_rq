@@ -608,8 +608,9 @@ class TLService:
                     (r[0], r[1]): float(r[2]) for r in cur.fetchall()
                 }
 
-        # 构造结构化数据：每条需求 × 每个仓库，计算综合成本
-        rows = []
+        # 构造结构化数据：以需求为主体，报价统一（不含仓库），各仓库运费嵌套对比
+        demand_rows = []
+        raw = []
         for d in demands:
             fid = d["smelter_id"]
             cid = d["category_id"]
@@ -618,30 +619,33 @@ class TLService:
             price = price_map.get((fid, cid))
             demand_tons = d["demand"]
 
+            warehouse_options = []
             for wid in warehouse_ids:
                 wname = warehouse_name_map.get(wid, f"仓库{wid}")
                 freight = freight_map.get((wid, fid))
-                if price is not None and freight is not None:
-                    total_cost = price + freight
-                    rows.append({
-                        "仓库": wname,
-                        "冶炼厂": fname,
-                        "品类": cat_name,
-                        "需求吨数": demand_tons,
-                        "报价(元/吨)": price,
-                        "运费(元/吨)": freight,
-                        "综合成本(元/吨)": total_cost,
-                    })
-                else:
-                    rows.append({
-                        "仓库": wname,
-                        "冶炼厂": fname,
-                        "品类": cat_name,
-                        "需求吨数": demand_tons,
-                        "报价(元/吨)": price,
-                        "运费(元/吨)": freight,
-                        "综合成本(元/吨)": None,
-                    })
+                total_cost = (price + freight) if (price is not None and freight is not None) else None
+                warehouse_options.append({
+                    "仓库": wname,
+                    "运费(元/吨)": freight,
+                    "综合成本(元/吨)": total_cost,
+                })
+                raw.append({
+                    "冶炼厂": fname,
+                    "品类": cat_name,
+                    "需求吨数": demand_tons,
+                    "报价(元/吨)": price,
+                    "仓库": wname,
+                    "运费(元/吨)": freight,
+                    "综合成本(元/吨)": total_cost,
+                })
+
+            demand_rows.append({
+                "冶炼厂": fname,
+                "品类": cat_name,
+                "需求吨数(吨)": demand_tons,
+                "报价(元/吨)": price,
+                "各仓库运费对比": warehouse_options,
+            })
 
         # 构造 prompt，调用 Claude
         import json
@@ -649,19 +653,18 @@ class TLService:
         from app import config as app_config
 
         client = OpenAI(api_key=app_config.LLM_API_KEY, base_url=app_config.LLM_BASE_URL)
-        data_str = json.dumps(rows, ensure_ascii=False, indent=2)
-        prompt = f"""你是一名采购优化顾问。以下是各仓库到各冶炼厂的采购数据（包含需求吨数、报价、运费、综合成本）：
+        data_str = json.dumps(demand_rows, ensure_ascii=False, indent=2)
+        prompt = f"""以下是各需求的报价及各仓库运费数据：
 
 {data_str}
 
-请根据以上数据，给出各仓库的发车安排建议，要求：
-1. 同一仓库发出的不同品类货物可以混装在同一辆车上，提高车辆利用率
-2. 尽量整车发（一般整车约20-30吨），避免零散发货
-3. 综合考虑成本，优先推荐综合成本（报价+运费）更低的方案
-4. 最终输出格式为：**各仓库发车意见表**，包含：仓库名、建议装车方案（品类+吨数+目的冶炼厂）、预计综合成本、发车备注
-5. 如有数据缺失（报价或运费为null），请在备注中说明需补录数据"""
+请给出各仓库发车建议，要求：
+1. 优先选综合成本低的仓库
+2. 同仓库不同品类可混装，尽量整车（20-30吨）
+3. 按仓库分段输出：仓库名、装车方案（品类+吨数+冶炼厂+综合成本）、备注
+4. 数据缺失的在备注注明
+5. 纯文本，简洁"""
 
-        client = OpenAI(api_key=app_config.LLM_API_KEY, base_url=app_config.LLM_BASE_URL)
         resp = client.chat.completions.create(
             model=app_config.LLM_MODEL,
             max_tokens=2048,
@@ -669,7 +672,7 @@ class TLService:
         )
         suggestion = resp.choices[0].message.content
 
-        return {"code": 200, "data": {"suggestion": suggestion, "raw": rows}}
+        return {"code": 200, "data": {"suggestion": suggestion, "raw": raw}}
 
 
 # ==================== 单例工厂 ====================

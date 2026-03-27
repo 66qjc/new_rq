@@ -6,25 +6,25 @@ import logging
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
+import bcrypt as _bcrypt
 from jose import JWTError, jwt
-from passlib.context import CryptContext
 
 from app import config
 from app.database import get_conn
 
 logger = logging.getLogger(__name__)
 
-_pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+_pwd_context = None  # passlib removed
 
 
 # ==================== 密码 / JWT 工具 ====================
 
 def hash_password(plain: str) -> str:
-    return _pwd_context.hash(plain)
+    return _bcrypt.hashpw(plain.encode(), _bcrypt.gensalt()).decode()
 
 
 def verify_password(plain: str, hashed: str) -> bool:
-    return _pwd_context.verify(plain, hashed)
+    return _bcrypt.checkpw(plain.encode(), hashed.encode())
 
 
 def create_access_token(payload: Dict[str, Any]) -> str:
